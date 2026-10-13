@@ -123,7 +123,7 @@ pub fn session_ref_from_report(
         return None;
     }
 
-    if agent == "pi" || agent == "omp" {
+    if agent == "pi" || agent == "omp" || agent == "pi-bolt" {
         return _agent_session_path
             .and_then(AgentSessionRef::path)
             .or_else(|| agent_session_id.and_then(AgentSessionRef::id));
@@ -184,7 +184,7 @@ pub fn session_ref_from_snapshot(
         return None;
     }
     let session_ref = match (agent, kind) {
-        ("pi" | "omp", AgentSessionRefKind::Path) => AgentSessionRef::path(value)?,
+        ("pi" | "omp" | "pi-bolt", AgentSessionRefKind::Path) => AgentSessionRef::path(value)?,
         (_, AgentSessionRefKind::Id) => AgentSessionRef::id(value)?,
         _ => return None,
     };
@@ -232,6 +232,13 @@ pub fn plan(source: &str, agent: &str, session_ref: &AgentSessionRef) -> Option<
         }
         ("herdr:pi", "pi", AgentSessionRefKind::Path | AgentSessionRefKind::Id) => {
             vec!["pi".into(), "--session".into(), session_ref.value.clone()]
+        }
+        ("herdr:pi-bolt", "pi-bolt", AgentSessionRefKind::Path | AgentSessionRefKind::Id) => {
+            vec![
+                "pi-bolt".into(),
+                "--session".into(),
+                session_ref.value.clone(),
+            ]
         }
         ("herdr:omp", "omp", AgentSessionRefKind::Path | AgentSessionRefKind::Id) => {
             // omp resume is `-r, --resume=<value>` (ID prefix or path); it has no
@@ -336,6 +343,7 @@ pub(crate) fn is_official_agent_source(source: &str, agent: &str) -> bool {
             | ("herdr:omp", "omp")
             | ("herdr:mastracode", "mastracode")
             | ("herdr:pi", "pi")
+            | ("herdr:pi-bolt", "pi-bolt")
             | ("herdr:hermes", "hermes")
             | ("herdr:opencode", "opencode")
             | ("herdr:qodercli", "qodercli")
@@ -373,6 +381,74 @@ mod tests {
 
     fn argv(parts: &[&str]) -> Vec<String> {
         parts.iter().map(|part| part.to_string()).collect()
+    }
+
+    #[test]
+    fn pi_bolt_session_reports_require_exact_pair_and_prefer_path() {
+        let path = absolute_test_path("bolt-session.jsonl");
+        for (source, agent, expected) in [
+            ("herdr:pi-bolt", "pi-bolt", true),
+            ("pi-bolt", "pi-bolt", false),
+            ("herdr:pi", "pi-bolt", false),
+            ("herdr:pi-bolt", "pi", false),
+            ("custom", "pi-bolt", false),
+        ] {
+            assert_eq!(is_official_agent_source(source, agent), expected);
+            assert_eq!(
+                session_ref_from_report(source, agent, Some("id".into()), Some(path.clone()))
+                    .is_some(),
+                expected
+            );
+        }
+        let session = session_ref_from_report(
+            "herdr:pi-bolt",
+            "pi-bolt",
+            Some("id".into()),
+            Some(path.clone()),
+        )
+        .unwrap();
+        assert_eq!(session, AgentSessionRef::path(&path).unwrap());
+        assert_eq!(
+            session_ref_from_snapshot("herdr:pi-bolt", "pi-bolt", session.kind, &session.value)
+                .unwrap()
+                .session_ref,
+            session
+        );
+        for path in [None, Some("relative.jsonl".into())] {
+            assert_eq!(
+                session_ref_from_report("herdr:pi-bolt", "pi-bolt", Some("id".into()), path),
+                AgentSessionRef::id("id")
+            );
+        }
+        assert!(session_ref_from_report("herdr:pi-bolt", "pi-bolt", None, None).is_none());
+        for session in [
+            AgentSessionRef::path(&path).unwrap(),
+            AgentSessionRef::id("id").unwrap(),
+        ] {
+            assert_eq!(
+                session_ref_from_snapshot("herdr:pi-bolt", "pi-bolt", session.kind, &session.value)
+                    .unwrap()
+                    .session_ref,
+                session
+            );
+            assert_eq!(
+                plan("herdr:pi-bolt", "pi-bolt", &session).unwrap().argv,
+                argv(&["pi-bolt", "--session", &session.value])
+            );
+            assert!(
+                session_ref_from_snapshot("pi-bolt", "pi-bolt", session.kind, &session.value)
+                    .is_none()
+            );
+            assert!(plan("pi-bolt", "pi-bolt", &session).is_none());
+            assert!(plan("herdr:pi-bolt", "pi", &session).is_none());
+        }
+        let resume = ReportedAgentResume {
+            source: "herdr:pi-bolt".into(),
+            agent: "pi-bolt".into(),
+            argv: argv(&["pi-bolt", "--session", &path]),
+        };
+        assert!(validate_resume_argv(&resume.argv).is_ok());
+        assert_eq!(resume.plan(Path::new(".")).argv, resume.argv);
     }
 
     #[test]

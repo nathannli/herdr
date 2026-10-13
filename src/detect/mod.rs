@@ -65,10 +65,11 @@ pub enum Agent {
     Letta,
     Maki,
     Muse,
+    PiBolt,
 }
 
 impl Agent {
-    pub const ALL: [Self; 24] = [
+    pub const ALL: [Self; 25] = [
         Self::Pi,
         Self::Claude,
         Self::Codex,
@@ -93,6 +94,7 @@ impl Agent {
         Self::Letta,
         Self::Maki,
         Self::Muse,
+        Self::PiBolt,
     ];
 
     pub const SCREEN_MANIFEST_AGENTS: [Self; 22] = [
@@ -147,6 +149,7 @@ pub fn agent_label(agent: Agent) -> &'static str {
         Agent::Letta => "letta",
         Agent::Maki => "maki",
         Agent::Muse => "muse",
+        Agent::PiBolt => "pi-bolt",
     }
 }
 
@@ -182,6 +185,7 @@ pub fn interactive_agent_executable(agent: Agent) -> &'static str {
         Agent::Letta => "letta",
         Agent::Maki => "maki",
         Agent::Muse => "muse",
+        Agent::PiBolt => "pi-bolt",
     }
 }
 
@@ -199,6 +203,7 @@ fn lookup_agent(name: &str) -> Option<Agent> {
     let name = path_basename(name);
     match name {
         "pi" => Some(Agent::Pi),
+        "pi-bolt" => Some(Agent::PiBolt),
         "claude" | "claude-code" => Some(Agent::Claude),
         "codex" => Some(Agent::Codex),
         "gemini" => Some(Agent::Gemini),
@@ -331,6 +336,7 @@ pub(crate) fn full_lifecycle_hook_authority(source: &str, agent_label: &str) -> 
     matches!(
         (source, agent_label),
         ("herdr:pi", "pi")
+            | ("herdr:pi-bolt", "pi-bolt")
             | ("herdr:omp", "omp")
             | ("herdr:mastracode", "mastracode")
             | ("herdr:opencode", "opencode")
@@ -966,6 +972,41 @@ mod tests {
         std::env::temp_dir().join(unique)
     }
 
+    #[test]
+    fn pi_bolt_identity_and_native_process_precedence() {
+        assert_eq!(identify_agent("pi-bolt"), Some(Agent::PiBolt));
+        assert_eq!(parse_agent_label("pi-bolt"), Some(Agent::PiBolt));
+        assert_eq!(agent_label(Agent::PiBolt), "pi-bolt");
+        assert_eq!(interactive_agent_executable(Agent::PiBolt), "pi-bolt");
+        assert_eq!(identify_agent("pi"), Some(Agent::Pi));
+        assert_eq!(identify_agent("omp"), Some(Agent::Omp));
+        for argv0 in ["pi-bolt", "/home/test/.local/bin/pi-bolt"] {
+            let mut process = foreground_process(42, "pi", &[argv0]);
+            process.argv0 = Some(argv0.to_string());
+            let job = crate::platform::ForegroundJob {
+                process_group_id: 42,
+                processes: vec![process],
+            };
+            assert_eq!(
+                identify_agent_in_job(&job),
+                Some((Agent::PiBolt, argv0.to_string()))
+            );
+        }
+    }
+
+    #[test]
+    fn pi_bolt_full_lifecycle_pair_is_exact() {
+        for (source, agent, expected) in [
+            ("herdr:pi-bolt", "pi-bolt", true),
+            ("pi-bolt", "pi-bolt", false),
+            ("herdr:pi", "pi-bolt", false),
+            ("herdr:pi-bolt", "pi", false),
+            ("custom", "pi-bolt", false),
+        ] {
+            assert_eq!(full_lifecycle_hook_authority(source, agent), expected);
+        }
+    }
+
     // ---- Agent identification ----
 
     #[test]
@@ -1092,6 +1133,7 @@ mod tests {
             (Agent::Letta, "letta"),
             (Agent::Maki, "maki"),
             (Agent::Muse, "muse"),
+            (Agent::PiBolt, "pi-bolt"),
         ];
         assert_eq!(expected.len(), Agent::ALL.len());
         for (agent, executable) in expected {
